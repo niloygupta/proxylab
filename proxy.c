@@ -15,9 +15,8 @@ static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
 void parse_request(int connfd);
 void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 		char *host, char *path, int *port);
-void extract_headers(rio_t *rp, char *host_header, char *other_headers);
-void forward_request(int fd, char *url, char *host, char *path, char *host_header,
-		char *other_headers, int port);
+
+void forward_request(int fd, char *url, char *host, char *path, int port);
 void ignore_sigpipe(int arg);
 
 int main(int argc, int **argv)
@@ -79,8 +78,7 @@ void parse_request(int connfd)
 {
 	size_t n;
 	char read_buf[MAXLINE], http_method[MAXLINE], url[MAXLINE],
-			http_version[MAXLINE],host[MAXLINE], path[MAXLINE],
-			headers[MAXLINE], other_headers[MAXLINE];
+			http_version[MAXLINE],host[MAXLINE], path[MAXLINE];
 	int port = 80;
 	rio_t rio;
 
@@ -88,64 +86,20 @@ void parse_request(int connfd)
 	if ((n = Rio_readlineb(&rio, read_buf, MAXLINE)) == 0)
 		return;
 
-	extract_headers(&rio, headers, other_headers);
-
 	parse_url(read_buf, url, http_method, http_version, host, path, &port);
-
-	// make a new string so as not to defile original url
 
 	if (!strncmp(read_buf, "https", strlen("https")))
 		printf("https Not supported");
 
-	forward_request(connfd, url, host, path, headers, other_headers, port);
-
-	//Ends here
+	forward_request(connfd, url, host, path, port);
 }
 
-void extract_headers(rio_t *rp, char *host_header, char *other_headers)
+
+void forward_request(int fd, char *url, char *host, char *path, int port)
 {
-	char buf[MAXLINE];
-	*other_headers = "";
-	*(other_headers + 1) = '\0';
-
-	Rio_readlineb(rp, buf, MAXLINE);
-	while (strcmp(buf, "\r\n"))
-	{
-		Rio_readlineb(rp, buf, MAXLINE);
-		printf("%s", buf);
-
-		int prefix = strlen("Host: ");
-
-		if (!strncmp(buf, "Host: ", prefix))
-			strcpy(host_header, buf + prefix);
-		/* We add other headers when required */
-		if (strncmp(buf, "User-Agent: ", strlen("User-Agent: "))
-				&& strncmp(buf, "Accept: ", strlen("Accept: "))
-				&& strncmp(buf, "Accept-Encoding: ",
-						strlen("Accept-Encoding: "))
-				&& strncmp(buf, "Connection: ", strlen("Connection: "))
-				&& strncmp(buf, "Proxy-Connection: ",
-						strlen("Proxy-Connection: ")))
-		{
-			sprintf(other_headers, "%s%s", other_headers, buf);
-		}
-		/* We added this check in order to ignore garbage headers */
-		if (buf[0] > 90 || buf[0] < 65)
-		{
-			return;
-		}
-	}
-	return;
-}
-
-void forward_request(int fd, char *url, char *host, char *path, char *host_header,
-		char *other_headers, int port)
-{
-	int server_fd;
-	char buf[MAXBUF], http_response[MAXBUF];
 	rio_t rio;
-
-	server_fd = Open_clientfd(host, port);
+	char buf[MAXBUF], http_response[MAXBUF];
+	int server_fd = Open_clientfd(host, port);
 
 	if (server_fd < 0)
 	{
@@ -153,27 +107,19 @@ void forward_request(int fd, char *url, char *host, char *path, char *host_heade
 		return;
 	}
 
-	/* The following code adds the necessary information to make buf a complete request */
 	sprintf(buf, "GET %s HTTP/1.0\r\n", path);
-	printf("Send request buf: \n%s\n", buf);
-
-	if (!strlen(host_header))
-		sprintf(buf, "%sHost: %s\r\n", buf, host);
-	else
-		sprintf(buf, "%sHost: %s\r\n", buf, host_header);
+	sprintf(buf, "%sHost: %s\r\n", buf, host);
 	strcat(buf, user_agent_hdr);
 	strcat(buf, accept_hdr);
 	strcat(buf, accept_encoding_hdr);
 	strcat(buf, "Connection: close\r\n");
 	strcat(buf, "Proxy-Connection: close\r\n");
-	strcat(buf,other_headers);
 	strcat(buf,"\r\n");
-
+	printf("HTTP request buf: \n%s\n", buf);
 
 	Rio_writen(server_fd, buf, strlen(buf));
 
-	strcpy(http_response, "");
-	strcpy(buf, "");
+	*buf ='\0';
 	Rio_readinitb(&rio, server_fd);
 
 	int connfd;
