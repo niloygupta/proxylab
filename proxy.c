@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "csapp.h"
+#include "cache.h"
 
 /* Recommended max cache and object sizes */
 #define MAX_CACHE_SIZE 1049000
@@ -19,7 +20,7 @@ void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 void forward_request(int fd, char *url, char *host, char *path, int port);
 void ignore_sigpipe(int arg);
 
-int main(int argc, int **argv)
+int main(int argc, char **argv)
 {
 	int listenfd, connfd, port;
 	socklen_t clientlen;
@@ -99,9 +100,20 @@ void forward_request(int fd, char *url, char *host, char *path, int port)
 {
 	rio_t rio;
 	char buf[MAXBUF], http_response[MAXBUF];
+	cache_line *cached_obj;
+	printf("\n %s",url);
+	cached_obj = get_cache_object(url);
+	if(cached_obj!=NULL)
+	{
+		printf("\nURL!!: %s\n",cached_obj->uri);
+		rio_writen(fd, cached_obj->content, cached_obj->length);
+		update_cache(cached_obj);
+		return;
+	}
+	printf("\n Opening connectiont to remote server");
 	int server_fd = Open_clientfd(host, port);
 
-	if (server_fd < 0)
+	if (server_fd < -1)
 	{
 		printf("Invalid file descriptor received");
 		return;
@@ -119,18 +131,30 @@ void forward_request(int fd, char *url, char *host, char *path, int port)
 
 	Rio_writen(server_fd, buf, strlen(buf));
 
-	*buf ='\0';
+	//*buf ='\0';
+	strcpy(http_response,"");
+	strcpy(buf,"");
 	Rio_readinitb(&rio, server_fd);
 
 	int connfd;
+	int cache_obj_size=0;
+	char cache_obj[MAX_OBJECT_SIZE];
+	strcpy(cache_obj,"");
+
 	do
 	{
-		*http_response = '\0';
+		//*http_response = '\0';
+		strcpy(http_response,"");
 		connfd = Rio_readnb(&rio, http_response, MAXBUF);
+		cache_obj_size +=connfd;
+		if(cache_obj_size < MAX_OBJECT_SIZE)
+					strcat(cache_obj,http_response);
 		rio_writen(fd, http_response, connfd);
 
-	} while (connfd > 0);
 
+	} while (connfd > 0);
+	if(cache_obj_size<MAX_OBJECT_SIZE)
+		put_cache_object(url,cache_obj,cache_obj_size);
 	return;
 }
 
