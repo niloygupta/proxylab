@@ -12,9 +12,10 @@ static const char *user_agent_hdr =
 static const char *accept_hdr =
 		"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
 static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
+
 sem_t proxy_mutex;
 
-void *parse_request(void *connfd_arg);
+void *parse_request(void  *connfd_ptr);
 void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 		char *host, char *path, int *port);
 
@@ -30,9 +31,6 @@ int main(int argc, char **argv)
 	char *haddrp;
 	pthread_t tid;
 	Sem_init(&proxy_mutex, 0, 1);
-
-	init_cache();
-
 	signal(SIGPIPE, ignore_sigpipe);
 	if (argc != 2)
 	{
@@ -41,14 +39,13 @@ int main(int argc, char **argv)
 	}
 
 	port = atoi(argv[1]);
-
 	listenfd = Open_listenfd(port);
 	while (1)
 	{
 		clientlen = sizeof(clientaddr);
-		connfd = Calloc(1, sizeof(int));
+		connfd = Calloc(1,sizeof(int));
 		*connfd = Accept(listenfd, (SA*) &clientaddr, &clientlen);
-		 P(&proxy_mutex);
+		P(&proxy_mutex);
 		/* Determine the domain name and IP address of the client */
 		hp = Gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,
 				sizeof(clientaddr.sin_addr.s_addr), AF_INET);
@@ -61,6 +58,33 @@ int main(int argc, char **argv)
 	}
 	return 0;
 }
+
+void *parse_request(void  *connfd_ptr)
+{
+	int connfd = *((int *)connfd_ptr);
+	V(&proxy_mutex);
+	Pthread_detach(pthread_self());
+	Free(connfd_ptr);
+	size_t n;
+	char read_buf[MAXLINE], http_method[MAXLINE], url[MAXLINE],
+			http_version[MAXLINE],host[MAXLINE], path[MAXLINE];
+	int port = 80;
+	rio_t rio;
+
+	Rio_readinitb(&rio, connfd);
+	if ((n = Rio_readlineb(&rio, read_buf, MAXLINE)) == 0)
+		return NULL;
+
+	parse_url(read_buf, url, http_method, http_version, host, path, &port);
+
+	if (!strncmp(read_buf, "https", strlen("https")))
+		printf("https Not supported");
+
+	forward_request(connfd, url, host, path, port);
+	Close(connfd);
+	return NULL;
+}
+
 void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 		char *host, char *path, int *port)
 {
@@ -84,38 +108,6 @@ void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 	}
 
 }
-void *parse_request(void *connfd_arg)
-{
-	int connfd = *((int *) connfd_arg);
-	V(&proxy_mutex);
-	Pthread_detach(pthread_self());
-	Free(connfd_arg);
-
-	size_t n;
-	char read_buf[MAXLINE], http_method[MAXLINE], url[MAXLINE],
-			http_version[MAXLINE], host[MAXLINE], path[MAXLINE];
-	int port = 80;
-	rio_t rio;
-
-	Rio_readinitb(&rio, connfd);
-	printf("\n Rio: %p",&rio);
-	if ((n = Rio_readlineb(&rio, read_buf, MAXLINE)) == 0)
-	{
-		Close(connfd);
-		return NULL ;
-	}
-
-	parse_url(read_buf, url, http_method, http_version, host, path, &port);
-
-	if (!strncmp(read_buf, "https", strlen("https")))
-		printf("https Not supported");
-
-	forward_request(connfd, url, host, path, port);
-	Close(connfd);
-	return NULL ;
-}
-
-
 void forward_request(int fd, char *url, char *host, char *path, int port)
 {
 	rio_t rio;

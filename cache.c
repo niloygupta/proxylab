@@ -2,25 +2,24 @@
 #include<stdio.h>
 #include<string.h>
 #include<stdlib.h>
-#include<unistd.h>
-
+#include<pthread.h>
 
 cache_line *head, *tail;
-int cache_free_size = MAX_CACHE_SIZE;
 pthread_rwlock_t cache_lock;
+int cache_free_size = MAX_CACHE_SIZE;
 void insert(cache_line* object);
 void delete(cache_line* object);
 void init_cache()
 {
     head = tail = NULL;
-    pthread_rwlock_init(&cache_lock, 0);
+    pthread_rwlock_init(&cache_lock, NULL);
 }
 
 /*Search the doubly linked list for the uri which is our key*/
 cache_line* get_cache_object(char* uri)
 {
-	pthread_rwlock_wrlock(&cache_lock);
-    cache_line *ptr = head;
+	pthread_rwlock_rdlock(&cache_lock);
+	cache_line *ptr = head;
     while(ptr != NULL)
     {
     	printf("\n URI: %s\n",uri);
@@ -48,11 +47,13 @@ void put_cache_object(char* uri,  char* content, int length)
 
     memcpy(cache_object->content, content, length);
     cache_object->length = length;
+
     if(length > cache_free_size)
     {
         while(length > cache_free_size)
             delete(tail);           /*Remove from the tail since that is the LRU object*/
     }
+
     insert(cache_object);
     pthread_rwlock_unlock(&cache_lock);
 }
@@ -61,7 +62,7 @@ void put_cache_object(char* uri,  char* content, int length)
 void insert(cache_line* object)
 {
    // ASSERT(cache_free_size > object->length);   /*We should have made enough space by this point*/
-	pthread_rwlock_wrlock(&cache_lock);
+	//pthread_rwlock_wrlock(&cache_lock);
 	if(head == NULL)
     {
         object->next = NULL;
@@ -77,13 +78,13 @@ void insert(cache_line* object)
         head = object;
     }
     cache_free_size -= object->length;
-    pthread_rwlock_unlock(&cache_lock);
+   // pthread_rwlock_unlock(&cache_lock);
     //display_cache();
 }
 
 void delete(cache_line* object)
 {
-	pthread_rwlock_wrlock(&cache_lock);
+	//pthread_rwlock_wrlock(&cache_lock);
 	if(object ==  head && tail==object)
     {
         head = tail = NULL;
@@ -101,7 +102,7 @@ void delete(cache_line* object)
         else
             tail = object->prev;
     }
-	pthread_rwlock_unlock(&cache_lock);
+	// pthread_rwlock_unlock(&cache_lock);
    // display_cache();
 }
 
