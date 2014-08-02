@@ -1,3 +1,12 @@
+/*
+ *
+ * Submission from: Niloy Gupta (Andrew ID: niloyg) and Rohit Upadhyaya (Andrew ID: rjupadhy)
+ *
+ * This submission does not work for youtube as youtube always redirects to a https connection
+ * and the proxy as per guidelines does not support https.
+ *
+ */
+
 #include <stdio.h>
 #include "csapp.h"
 #include "cache.h"
@@ -13,22 +22,30 @@ static const char *accept_hdr =
 		"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
 static const char *accept_encoding_hdr = "Accept-Encoding: gzip, deflate\r\n";
 
+#define UA_LEN 12
+#define ACC_LEN 8
+#define ACE_LEN 17
+#define CON_LEN 12
+#define PCON_LEN 18
+#define H_LEN 6
+
 sem_t proxy_mutex;
 
 void *parse_request(void  *connfd_ptr);
 void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 		char *host, char *path, int *port);
 
-void forward_request(int fd, char *url, char *host, char *path, int port);
+void forward_request(int fd, char *url, char *host, char *path, int port,char *other_headers);
 void ignore_sigpipe(int arg);
+void parse_headers(rio_t *rio, char *add_headers);
 
 int main(int argc, char **argv)
 {
 	int listenfd, *connfd, port;
 	socklen_t clientlen;
 	struct sockaddr_in clientaddr;
-	struct hostent *hp;
-	char *haddrp;
+	//struct hostent *hp;
+	//char *haddrp;
 	pthread_t tid;
 	Sem_init(&proxy_mutex, 0, 1);
 	signal(SIGPIPE, ignore_sigpipe);
@@ -47,10 +64,10 @@ int main(int argc, char **argv)
 		*connfd = Accept(listenfd, (SA*) &clientaddr, &clientlen);
 		P(&proxy_mutex);
 		/* Determine the domain name and IP address of the client */
-		hp = Gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,
+		/*hp = Gethostbyaddr((const char *) &clientaddr.sin_addr.s_addr,
 				sizeof(clientaddr.sin_addr.s_addr), AF_INET);
 		haddrp = inet_ntoa(clientaddr.sin_addr);
-		printf("server connected to %s (%s)\n", hp->h_name, haddrp);
+		printf("server connected to %s (%s)\n", hp->h_name, haddrp);*/
 		Pthread_create(&tid, NULL, parse_request, connfd);
 
 		//parse_request(connfd);
@@ -67,7 +84,8 @@ void *parse_request(void  *connfd_ptr)
 	Free(connfd_ptr);
 	size_t n;
 	char read_buf[MAXLINE], http_method[MAXLINE], url[MAXLINE],
-			http_version[MAXLINE],host[MAXLINE], path[MAXLINE];
+			http_version[MAXLINE],host[MAXLINE], path[MAXLINE],
+			add_headers[MAXLINE];
 	int port = 80;
 	rio_t rio;
 
@@ -75,12 +93,13 @@ void *parse_request(void  *connfd_ptr)
 	if ((n = Rio_readlineb(&rio, read_buf, MAXLINE)) == 0)
 		return NULL;
 
+	parse_headers(&rio, add_headers);
 	parse_url(read_buf, url, http_method, http_version, host, path, &port);
 
 	if (!strncmp(read_buf, "https", strlen("https")))
 		printf("https Not supported");
 
-	forward_request(connfd, url, host, path, port);
+	forward_request(connfd, url, host, path, port,add_headers);
 	Close(connfd);
 	return NULL;
 }
@@ -91,7 +110,10 @@ void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 	*path = '/';
 	*(path + 1) = '\0';
 	sscanf(read_buf, "%s %s %s", http_method, url, http_version);
-	sscanf(url, "http://%s", host);
+	if (!strncmp(url, "http", strlen("http")) || !strncmp(url, "https", strlen("https")))
+		sscanf(url, "http://%s", host);
+	else
+		strcpy(host, url);
 
 	char *extract_host = strchr(host, '/');
 	if (extract_host != NULL )
@@ -108,16 +130,15 @@ void parse_url(char *read_buf, char *url, char *http_method, char *http_version,
 	}
 
 }
-void forward_request(int fd, char *url, char *host, char *path, int port)
+void forward_request(int fd, char *url, char *host, char *path, int port, char *other_headers)
 {
 	rio_t rio;
 	char buf[MAXBUF], http_response[MAXBUF];
 	cache_line *cached_obj;
-	printf("\n %s",url);
+
 	cached_obj = get_cache_object(url);
 	if(cached_obj!=NULL)
 	{
-		printf("\nURL!!: %s\n",cached_obj->uri);
 		rio_writen(fd, cached_obj->content, cached_obj->length);
 		update_cache(cached_obj);
 		return;
@@ -138,7 +159,8 @@ void forward_request(int fd, char *url, char *host, char *path, int port)
 	strcat(buf, accept_encoding_hdr);
 	strcat(buf, "Connection: close\r\n");
 	strcat(buf, "Proxy-Connection: close\r\n");
-	strcat(buf,"\r\n");
+	sprintf(buf, "%s%s\r\n", buf, other_headers);
+
 	printf("HTTP request buf: \n%s\n", buf);
 
 	Rio_writen(server_fd, buf, strlen(buf));
@@ -158,6 +180,11 @@ void forward_request(int fd, char *url, char *host, char *path, int port)
 		//*http_response = '\0';
 		strcpy(http_response,"");
 		connfd = Rio_readnb(&rio, http_response, MAXBUF);
+		if(connfd<0)
+		{
+			connfd = 1;
+			continue;
+		}
 		cache_obj_size +=connfd;
 		if(cache_obj_size < MAX_OBJECT_SIZE)
 					strcat(cache_obj,http_response);
@@ -175,3 +202,25 @@ void ignore_sigpipe(int arg)
 	printf("Signal Sigpipe received\n");
 }
 
+void parse_headers(rio_t *rio, char *add_headers)
+{
+	char buf[MAXLINE];
+
+	strcpy(add_headers, "");
+	Rio_readlineb(rio, buf, MAXLINE);
+	while (strcmp(buf, "\r\n"))
+	{
+		Rio_readlineb(rio, buf, MAXLINE);
+		if (strncmp(buf, "User-Agent: ", UA_LEN)
+				&& strncmp(buf, "Accept: ", ACC_LEN)
+				&& strncmp(buf, "Accept-Encoding: ", ACE_LEN)
+				&& strncmp(buf, "Connection: ", CON_LEN)
+				&& strncmp(buf, "Proxy-Connection: ", PCON_LEN)
+				&& strncmp(buf, "Host: ", H_LEN))
+		{
+			sprintf(add_headers, "%s%s", add_headers, buf);
+		}
+	}
+
+	return;
+}
